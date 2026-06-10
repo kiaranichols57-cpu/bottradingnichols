@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Trading Pro V2.0</title>
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #0f0f23; color: #fff; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; border-radius: 10px; margin-bottom: 30px; }
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; }
+        .header p { font-size: 1.1em; opacity: 0.9; }
+        .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .card { background: #1a1a3e; border: 1px solid #667eea; border-radius: 10px; padding: 20px; }
+        .card h2 { margin-bottom: 15px; color: #667eea; }
+        .balance { font-size: 2em; color: #00ff00; font-weight: bold; }
+        input, select, button { 
+            width: 100%; padding: 10px; margin: 10px 0; 
+            background: #0f0f23; border: 1px solid #667eea; 
+            color: #fff; border-radius: 5px; cursor: pointer;
+            font-size: 1em;
+        }
+        button { background: #667eea; font-weight: bold; transition: 0.3s; }
+        button:hover { background: #764ba2; transform: scale(1.02); }
+        .trades-list { max-height: 400px; overflow-y: auto; }
+        .trade-item { background: #0f0f23; padding: 10px; margin: 10px 0; border-left: 4px solid #667eea; border-radius: 5px; }
+        .trade-item.buy { border-left-color: #00ff00; }
+        .trade-item.sell { border-left-color: #ff0000; }
+        #chart { max-width: 100%; height: 300px; }
+        @media (max-width: 768px) { .dashboard { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Bot Trading Pro V2.0</h1>
+            <p>Sistema automático de trading con IA - Heroku Edition</p>
+        </div>
+
+        <div class="dashboard">
+            <!-- Login -->
+            <div class="card" id="loginCard">
+                <h2>🔐 Iniciar Sesión</h2>
+                <input type="text" id="username" placeholder="Usuario">
+                <input type="password" id="password" placeholder="Contraseña">
+                <button onclick="login()">Acceder</button>
+                <p style="margin-top: 20px; font-size: 0.9em; opacity: 0.7;">
+                    Demo: admin / admin123
+                </p>
+            </div>
+
+            <!-- Balance -->
+            <div class="card" id="balanceCard" style="display:none;">
+                <h2>💰 Tu Balance</h2>
+                <div class="balance" id="balanceAmount">$10,000.00</div>
+                <button onclick="logout()" style="margin-top: 20px; background: #ff6b6b;">Cerrar Sesión</button>
+            </div>
+
+            <!-- Trading Manual -->
+            <div class="card" id="tradingCard" style="display:none;">
+                <h2>📈 Trading Manual</h2>
+                <select id="symbol">
+                    <option>BTC</option>
+                    <option>ETH</option>
+                    <option>XRP</option>
+                </select>
+                <select id="type">
+                    <option value="buy">COMPRAR</option>
+                    <option value="sell">VENDER</option>
+                </select>
+                <input type="number" id="price" placeholder="Precio" step="0.01">
+                <input type="number" id="amount" placeholder="Cantidad">
+                <button onclick="executeTrade()">Ejecutar Operación</button>
+            </div>
+
+            <!-- Estrategias -->
+            <div class="card" id="strategiesCard" style="display:none;">
+                <h2>🎯 Estrategias Automáticas</h2>
+                <select id="strategyType">
+                    <option value="ma">Media Móvil</option>
+                    <option value="rsi">RSI</option>
+                    <option value="bollinger">Bandas Bollinger</option>
+                    <option value="macd">MACD</option>
+                    <option value="grid">Grid Trading</option>
+                    <option value="dca">DCA (Promedio de Costo)</option>
+                </select>
+                <button onclick="activateStrategy()">Activar Estrategia</button>
+                <p id="strategyStatus" style="margin-top: 10px; color: #00ff00;"></p>
+            </div>
+
+            <!-- Gráfico -->
+            <div class="card" id="chartCard" style="display:none; grid-column: 1/-1;">
+                <h2>📊 Precios en Tiempo Real</h2>
+                <canvas id="chart"></canvas>
+            </div>
+
+            <!-- Historial -->
+            <div class="card" id="historyCard" style="display:none; grid-column: 1/-1;">
+                <h2>📋 Historial de Operaciones</h2>
+                <div class="trades-list" id="tradesList">
+                    <p style="color: #888;">Cargando operaciones...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let token = localStorage.getItem('token');
+        let chartInstance = null;
+        let pricesHistory = { labels: [], BTC: [], ETH: [], XRP: [] };
+
+        // Login
+        function login() {
+            const username = document.getElementById('username').value;
+            const password = document.getElementById('password').value;
+
+            fetch('/api/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ username, password })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    token = data.token;
+                    localStorage.setItem('token', token);
+                    showDashboard();
+                    loadBalance();
+                    loadTrades();
+                    initChart();
+                    socket.emit('market_data');
+                } else {
+                    alert('❌ ' + data.message);
+                }
+            });
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            token = null;
+            location.reload();
+        }
+
+        function showDashboard() {
+            document.getElementById('loginCard').style.display = 'none';
+            document.getElementById('balanceCard').style.display = 'block';
+            document.getElementById('tradingCard').style.display = 'block';
+            document.getElementById('strategiesCard').style.display = 'block';
+            document.getElementById('chartCard').style.display = 'block';
+            document.getElementById('historyCard').style.display = 'block';
+        }
+
+        function loadBalance() {
+            fetch('/api/balance', {
+                headers: { 'Authorization': `Bearer ${token}`, 'X-Username': 'admin' }
+            })
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('balanceAmount').textContent = `$${data.balance.toLocaleString('es-ES', {minimumFractionDigits: 2})}`;
+            });
+        }
+
+        function executeTrade() {
+            const symbol = document.getElementById('symbol').value;
+            const type = document.getElementById('type').value;
+            const price = parseFloat(document.getElementById('price').value);
+            const amount = parseFloat(document.getElementById('amount').value);
+
+            fetch('/api/trade', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`,
+                    'X-Username': 'admin'
+                },
+                body: JSON.stringify({ symbol, type, price, amount })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('✅ Operación ejecutada');
+                    loadTrades();
+                }
+            });
+        }
+
+        function loadTrades() {
+            fetch('/api/trades', {
+                headers: { 'Authorization': `Bearer ${token}`, 'X-Username': 'admin' }
+            })
+            .then(r => r.json())
+            .then(data => {
+                const list = document.getElementById('tradesList');
+                list.innerHTML = data.trades.length ? data.trades.map(t => 
+                    `<div class="trade-item ${t.type}">
+                        <strong>${t.symbol}</strong> - ${t.type.toUpperCase()} @ $${t.price} x ${t.amount}
+                        <br><small>${new Date(t.timestamp).toLocaleString('es-ES')}</small>
+                    </div>`
+                ).join('') : '<p style="color: #888;">Sin operaciones</p>';
+            });
+        }
+
+        function activateStrategy() {
+            const strategy = document.getElementById('strategyType').value;
+            const strategies = {
+                'ma': 'Media Móvil Crossover',
+                'rsi': 'RSI (Sobreventa/Sobrecompra)',
+                'bollinger': 'Bandas Bollinger',
+                'macd': 'MACD Signal',
+                'grid': 'Grid Trading',
+                'dca': 'Promedio de Costo Mensual'
+            };
+            document.getElementById('strategyStatus').textContent = `✅ ${strategies[strategy]} ACTIVA`;
+        }
+
+        function initChart() {
+            const ctx = document.getElementById('chart').getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: pricesHistory.labels,
+                    datasets: [
+                        { label: 'BTC', data: pricesHistory.BTC, borderColor: '#ff9900', tension: 0.1 },
+                        { label: 'ETH', data: pricesHistory.ETH, borderColor: '#667eea', tension: 0.1 },
+                        { label: 'XRP', data: pricesHistory.XRP, borderColor: '#23b36d', tension: 0.1 }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: { y: { beginAtZero: false, ticks: { color: '#fff' } }, x: { ticks: { color: '#fff' } } }
+                }
+            });
+        }
+
+        socket.on('market_update', (data) => {
+            const now = new Date().toLocaleTimeString();
+            pricesHistory.labels.push(now);
+            pricesHistory.BTC.push(data.BTC);
+            pricesHistory.ETH.push(data.ETH);
+            pricesHistory.XRP.push(data.XRP);
+
+            if (pricesHistory.labels.length > 20) {
+                pricesHistory.labels.shift();
+                pricesHistory.BTC.shift();
+                pricesHistory.ETH.shift();
+                pricesHistory.XRP.shift();
+            }
+
+            if (chartInstance) {
+                chartInstance.data.labels = pricesHistory.labels;
+                chartInstance.data.datasets[0].data = pricesHistory.BTC;
+                chartInstance.data.datasets[1].data = pricesHistory.ETH;
+                chartInstance.data.datasets[2].data = pricesHistory.XRP;
+                chartInstance.update();
+            }
+
+            setTimeout(() => socket.emit('market_data'), 2000);
+        });
+
+        if (token) {
+            showDashboard();
+            loadBalance();
+            loadTrades();
+            initChart();
+            socket.emit('market_data');
+        }
+    </script>
+</body>
+</html>
